@@ -1,0 +1,17 @@
+ROLES = [
+    "Doctor",
+    "Archivist",
+    "Foreman",
+    "Bound One",
+    "Stranger",
+    "Priest",
+    "Watcher",
+    "Undertaker",
+    "Herbalist",
+    "Magistrate",
+    "Mourner",
+    "Smuggler",
+    "Midwife",
+    "Child",
+    "Silent One",
+]
