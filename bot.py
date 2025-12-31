@@ -1,168 +1,164 @@
-import random
 import asyncio
-from telegram import Update
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
+    CallbackQueryHandler,
     ContextTypes,
-    MessageHandler,
-    filters,
 )
 
 from config import BOT_TOKEN
-from core.session_manager import SessionManager
-from game.models import Player, Phase
-from game.roles import ROLES
 
-# --------------------
-# GLOBAL SESSION STORE
-# --------------------
-sessions = SessionManager()
+from core.game_engine import GameEngine
+from core.notifier import Notifier
 
-# --------------------
-# BASIC COMMANDS
-# --------------------
+from game.models import GameState, Player
+from game.roles import ALL_ROLES
 
+
+# ---------------------------------
+# GLOBAL SESSION STORAGE (per group)
+# ---------------------------------
+SESSIONS = {}  # chat_id -> (GameState, GameEngine)
+
+
+# ---------------------------------
+# HELPERS
+# ---------------------------------
+def get_session(chat_id):
+    return SESSIONS.get(chat_id)
+
+
+def is_admin(update: Update):
+    member = update.effective_chat.get_member(update.effective_user.id)
+    return member.status in ("administrator", "creator")
+
+
+# ---------------------------------
+# COMMANDS
+# ---------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🩸 Veil Town\n\n"
-        "/join — enter the town\n"
-        "/begin — seal the town (5–15 players)"
-    )
+    chat_id = update.effective_chat.id
+
+    state = GameState(chat_id)
+    notifier = Notifier(context.bot, chat_id)
+    engine = GameEngine(state, notifier)
+
+    SESSIONS[chat_id] = (state, engine)
+
+    await engine.start_lobby()
+
 
 async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+    session = get_session(chat_id)
+    if not session:
+        return
+
+    state, _ = session
     user = update.effective_user
-    game = sessions.get_game(chat_id)
 
-    if game.started:
-        await update.message.reply_text("The town is sealed. You cannot enter.")
+    if user.id in state.players:
         return
 
-    if user.id in game.players:
-        await update.message.reply_text("You are already in the town.")
-        return
+    state.players[user.id] = Player(user.id, user.first_name)
 
-    game.players[user.id] = Player(
-        user_id=user.id,
-        name=user.first_name
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"{user.first_name} joined the town."
     )
 
-    await update.message.reply_text(f"{user.first_name} has entered the town.")
 
-async def begin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def extend(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    game = sessions.get_game(chat_id)
-
-    if game.started:
-        await update.message.reply_text("The game has already started.")
+    session = get_session(chat_id)
+    if not session:
         return
 
-    count = len(game.players)
-    if count < 5 or count > 15:
-        await update.message.reply_text("The game requires 5–15 players.")
+    _, engine = session
+    await engine.extend_wait()
+
+
+async def force_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
         return
 
-    roles = random.sample(ROLES, count)
+    chat_id = update.effective_chat.id
+    session = get_session(chat_id)
+    if not session:
+        return
 
-    for player, role in zip(game.players.values(), roles):
-        player.role = role
-        await context.bot.send_message(
-            chat_id=player.user_id,
-            text=f"🩸 Your role: {role}\nTrust no one."
+    _, engine = session
+    await engine.force_start()
+
+
+# ---------------------------------
+# CALLBACKS (BUTTONS)
+# ---------------------------------
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    user_id = query.from_user.id
+
+    # Find session
+    session = None
+    for state, engine in SESSIONS.values():
+        if user_id in state.players:
+            session = (state, engine)
+            break
+
+    if not session:
+        return
+
+    state, _ = session
+
+    # -----------------------------
+    # NIGHT ACTION
+    # -----------------------------
+    if data.startswith("night:"):
+        target_id = int(data.split(":")[1])
+        state.record_night_action(user_id, target_id)
+
+        await query.edit_message_text(
+            "Your choice is locked."
         )
 
-    game.started = True
-    game.phase = Phase.DISCUSSION
+    # -----------------------------
+    # VOTE
+    # -----------------------------
+    elif data.startswith("vote:"):
+        target_id = int(data.split(":")[1])
+        state.record_vote(user_id, target_id)
 
-    await update.message.reply_text(
-        "🌑 The town is sealed.\nThe game begins."
-    )
+        await query.edit_message_text(
+            "Your vote has been cast."
+        )
 
-    # START THE GAME ENGINE
-    context.application.create_task(
-        game_engine(chat_id, context)
-    )
 
-# --------------------
-# MESSAGE TRACKING
-# --------------------
-
-async def track_speech(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    user = update.effective_user
-    game = sessions.get_game(chat_id)
-
-    if game.phase == Phase.DISCUSSION and user.id in game.players:
-        game.players[user.id].spoke = True
-
-# --------------------
-# GAME ENGINE
-# --------------------
-
-async def game_engine(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
-    game = sessions.get_game(chat_id)
-
-    while game.started:
-
-        # --------------------
-        # DISCUSSION PHASE
-        # --------------------
-        if game.phase == Phase.DISCUSSION:
-
-            # Reset discussion flags
-            for p in game.players.values():
-                p.spoke = False
-
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="🗣️ Discussion Phase has begun.\nYou have 2 minutes."
-            )
-
-            # Discussion timer
-            await asyncio.sleep(120)
-
-            silent_players = [
-                p.name for p in game.players.values() if not p.spoke
-            ]
-
-            if silent_players:
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text="⏳ Discussion ended.\nSilent players:\n" +
-                         "\n".join(f"- {name}" for name in silent_players)
-                )
-            else:
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text="⏳ Discussion ended.\nEveryone spoke."
-                )
-
-            # TEMPORARY STOP (next phases added later)
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="🌘 Night will fall soon...\n(To be implemented)"
-            )
-
-            break  # Stop engine for now (professional, intentional)
-
-# --------------------
-# MAIN
-# --------------------
-
+# ---------------------------------
+# BOOTSTRAP
+# ---------------------------------
 def main():
-    if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN environment variable not set")
-
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    # commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("join", join))
-    app.add_handler(CommandHandler("begin", begin))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, track_speech))
+    app.add_handler(CommandHandler("extend", extend))
+    app.add_handler(CommandHandler("forcestart", force_start))
 
-    print("🩸 Veil Town is running...")
+    # buttons
+    app.add_handler(CallbackQueryHandler(handle_callback))
+
+    print("Veil Town engine is live.")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
