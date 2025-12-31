@@ -1,4 +1,6 @@
 import random
+from game.models import Phase
+import asyncio
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
