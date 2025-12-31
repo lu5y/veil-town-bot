@@ -1,4 +1,11 @@
 from dataclasses import dataclass, field
+from enum import Enum, auto
+
+class Phase(Enum):
+    LOBBY = auto()
+    DISCUSSION = auto()
+    NIGHT = auto()
+    RESOLUTION = auto()
 
 @dataclass
 class Player:
@@ -9,6 +16,6 @@ class Player:
 
 @dataclass
 class GameState:
+    phase: Phase = Phase.LOBBY
     started: bool = False
-    phase: str = "LOBBY"  # LOBBY | DISCUSSION
     players: dict[int, Player] = field(default_factory=dict)
