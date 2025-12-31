@@ -56,6 +56,40 @@ async def begin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if count < 5 or count > 15:
         await update.message.reply_text("Need 5–15 players.")
         return
+async def game_engine(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
+    game = sessions.get_game(chat_id)
+
+    while game.started:
+        if game.phase == Phase.DISCUSSION:
+            # Reset discussion tracking
+            for p in game.players.values():
+                p.spoke = False
+
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="🗣️ Discussion Phase has begun.\nYou have 2 minutes."
+            )
+
+            # Discussion timer
+            await asyncio.sleep(120)
+
+            silent = [p.name for p in game.players.values() if not p.spoke]
+
+            if silent:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="⏳ Discussion ended.\nSilent players:\n" +
+                         "\n".join(f"- {n}" for n in silent)
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="⏳ Discussion ended.\nEveryone spoke."
+                )
+
+            # Move to next phase (future)
+            game.phase = Phase.NIGHT
+            break
 
     roles = random.sample(ROLES, count)
 
