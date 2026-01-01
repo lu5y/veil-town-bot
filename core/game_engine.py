@@ -20,33 +20,32 @@ class GameEngine:
         self.lobby_started_at = None
 
     async def start_lobby(self):
-        from core.narrator import Narrator
-        # Start the clock BEFORE sending the message
+        # Start the clock
         self.lobby_started_at = datetime.now()
         
-        # Send initial message (0 players, 120 seconds left)
-        await self.notifier.group(Narrator.opening(0, 120)) 
+        # REMOVED: await self.notifier.group(...) 
+        # Reason: handlers.py already sent the message with the button. 
+        # We don't want a duplicate.
+        
         self.task = asyncio.create_task(self._lobby_loop())
 
     def get_time_left(self):
-        """Calculates seconds remaining in the lobby."""
         if not self.lobby_started_at:
             return 120
         elapsed = (datetime.now() - self.lobby_started_at).seconds
-        duration = 120 # Standard lobby time
+        duration = 120
         return max(0, duration - elapsed)
 
     async def _lobby_loop(self):
         while self.phase == Phase.LOBBY:
             time_left = self.get_time_left()
             
-            # Auto-start check
             if time_left <= 0:
                 if len(self.state.players) >= MIN_PLAYERS:
                     await self.start_game()
                     return
                 else:
-                    # Reset timer if not enough players to avoid crash
+                    # Reset timer to keep lobby open if not enough players
                     self.lobby_started_at = datetime.now()
             
             await asyncio.sleep(2)
@@ -76,7 +75,7 @@ class GameEngine:
         from core.narrator import Narrator
         deaths = []
         
-        # --- WATCHER LOGIC ---
+        # Watcher Logic
         for uid, action in self.state.night_actions.items():
             actor = self.state.players[uid]
             if actor.role_key == "Watcher":
