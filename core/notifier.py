@@ -1,96 +1,52 @@
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from core.narrator import Narrator
 
-async def open_voting(self, players):
-    keyboard = []
-
-    for p in players:
-        keyboard.append([
-            InlineKeyboardButton(
-                text=f"🗳️ {p.name}",
-                callback_data=f"vote:{p.user_id}"
-            )
-        ])
-
-    await self.app.bot.send_message(
-        chat_id=self.chat_id,
-        text="🗳️ *Voting Phase*\nChoose one player to condemn.",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
-    )
 class Notifier:
-    def __init__(self, application, chat_id):
-        """
-        application: telegram.ext.Application
-        chat_id: group chat id
-        """
-        self.app = application
+    def __init__(self, bot, chat_id):
+        self.bot = bot
         self.chat_id = chat_id
 
-    # -------------------------------------------------
-    # BASIC GROUP MESSAGE
-    # -------------------------------------------------
     async def group(self, text):
-        await self.app.bot.send_message(
+        try:
+            await self.bot.send_message(chat_id=self.chat_id, text=text, parse_mode='Markdown')
+        except:
+            pass # Fail silently as per rules
+
+    async def dm(self, user_id, text, keyboard=None):
+        try:
+            await self.bot.send_message(chat_id=user_id, text=text, reply_markup=keyboard, parse_mode='Markdown')
+        except:
+            pass
+
+    async def send_roles(self, state):
+        for p in state.players.values():
+            await self.dm(p.user_id, Narrator.role_dm(p.role))
+
+    async def night_controls(self, state):
+        alive = [p for p in state.players.values() if p.is_alive]
+        
+        for p in state.players.values():
+            if not p.is_alive or not p.role.has_night_action:
+                continue
+                
+            # Filter targets (self-targeting usually disabled)
+            targets = [t for t in alive if t.user_id != p.user_id]
+            
+            rows = []
+            for t in targets:
+                rows.append([InlineKeyboardButton(f"{t.name}", callback_data=f"night:{t.user_id}")])
+            
+            await self.dm(p.user_id, "Select your target:", InlineKeyboardMarkup(rows))
+
+    async def voting_controls(self, state):
+        alive = [p for p in state.players.values() if p.is_alive]
+        rows = []
+        for t in alive:
+            rows.append([InlineKeyboardButton(t.name, callback_data=f"vote:{t.user_id}")])
+            
+        # Send a centralized voting pad to the group
+        await self.bot.send_message(
             chat_id=self.chat_id,
-            text=text
-        )
-
-    # -------------------------------------------------
-    # GAME FLOW ANNOUNCEMENTS
-    # -------------------------------------------------
-    async def announce_game_start(self, min_players):
-        await self.group(
-            "🕯️ *The Veil stirs…*\n"
-            "A new game is forming.\n\n"
-            f"Minimum players: {min_players}\n"
-            "Press /join to enter."
-        )
-
-    async def announce_roles_assigning(self):
-        await self.group(
-            "🎭 *Roles are being assigned…*\n"
-            "Check your private messages."
-        )
-
-    async def announce_night(self):
-        await self.group(
-            "🌑 *Night falls over Veil Town.*\n"
-            "Those who act in darkness may now choose."
-        )
-
-    async def announce_dawn(self):
-        await self.group(
-            "🌅 *Dawn breaks.*\n"
-            "The town gathers to face the truth."
-        )
-
-    async def announce_discussion(self, seconds):
-        await self.group(
-            f"💬 *Discussion Phase*\n"
-            f"You have {seconds} seconds to speak."
-        )
-
-    async def open_voting(self, alive_players):
-        await self.group(
-            "🗳️ *Voting has begun.*\n"
-            "Choose wisely."
-        )
-
-    async def resolve_votes(self, executed_player=None):
-        if executed_player:
-            await self.group(
-                f"⚖️ *Judgment is passed.*\n"
-                f"**{executed_player.name}** has been executed."
-            )
-        else:
-            await self.group(
-                "⚖️ *Judgment fails.*\n"
-                "No consensus was reached."
-            )
-
-    async def announce_winner(self, winning_faction):
-        await self.group(
-            f"🏁 *Game Over*\n"
-            f"**{winning_faction}** has won the game."
+            text="Who do you condemn?",
+            reply_markup=InlineKeyboardMarkup(rows)
         )
