@@ -3,6 +3,7 @@ from datetime import datetime
 from enum import Enum, auto
 from config import TEST_MODE, MIN_PLAYERS
 from game.roles import Faction
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 class Phase(Enum):
     LOBBY = auto()
@@ -18,15 +19,12 @@ class GameEngine:
         self.phase = Phase.LOBBY
         self.task = None
         self.lobby_started_at = None
+        self.lobby_message_id = None # <--- STORES THE MESSAGE ID
 
-    async def start_lobby(self):
-        # Start the clock
+    async def start_lobby(self, message_id):
+        self.lobby_message_id = message_id
         self.lobby_started_at = datetime.now()
-        
-        # REMOVED: await self.notifier.group(...) 
-        # Reason: handlers.py already sent the message with the button. 
-        # We don't want a duplicate.
-        
+        # Start the update loop
         self.task = asyncio.create_task(self._lobby_loop())
 
     def get_time_left(self):
@@ -37,21 +35,40 @@ class GameEngine:
         return max(0, duration - elapsed)
 
     async def _lobby_loop(self):
+        from core.narrator import Narrator
+        
         while self.phase == Phase.LOBBY:
-            time_left = self.get_time_left()
-            
+            # 1. Update the Message every 5 seconds (not 30, so it feels responsive)
+            try:
+                time_left = self.get_time_left()
+                names = [p.name for p in self.state.players.values()]
+                
+                # Use the notifier to edit the existing message
+                join_btn = InlineKeyboardMarkup([[InlineKeyboardButton("Join Veil Town", callback_data="join")]])
+                await self.notifier.bot.edit_message_text(
+                    chat_id=self.state.chat_id,
+                    message_id=self.lobby_message_id,
+                    text=Narrator.opening(names, time_left),
+                    reply_markup=join_btn,
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                print(f"Lobby update failed: {e}")
+
+            # 2. Check Auto-Start
             if time_left <= 0:
                 if len(self.state.players) >= MIN_PLAYERS:
                     await self.start_game()
                     return
                 else:
-                    # Reset timer to keep lobby open if not enough players
-                    self.lobby_started_at = datetime.now()
+                    self.lobby_started_at = datetime.now() # Reset timer
             
-            await asyncio.sleep(2)
+            await asyncio.sleep(5) # Update every 5 seconds
 
     async def force_start(self):
         if self.phase == Phase.LOBBY:
+            if self.task:
+                self.task.cancel() # Stop the timer loop
             await self.start_game()
 
     async def start_game(self):
