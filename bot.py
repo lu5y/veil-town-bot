@@ -94,7 +94,24 @@ async def force_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     _, engine = session
     await engine.force_start()
+async def ignite(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
 
+    if chat_id in SESSIONS:
+        await update.message.reply_text("🔥 Game already running.")
+        return
+
+    engine = GameEngine(chat_id, context.bot)
+    notifier = Notifier(context.bot)
+
+    SESSIONS[chat_id] = {
+        "engine": engine,
+        "notifier": notifier,
+    }
+
+    await update.message.reply_text("🕯️ The veil stirs…")
+
+    await engine.start()
 
 # ---------------------------------
 # CALLBACKS (BUTTONS)
@@ -152,7 +169,7 @@ def main():
     app.add_handler(CommandHandler("join", join))
     app.add_handler(CommandHandler("extend", extend))
     app.add_handler(CommandHandler("forcestart", force_start))
-
+    app.add_handler(CommandHandler("ignite", ignite))
     # buttons
     app.add_handler(CallbackQueryHandler(handle_callback))
 
