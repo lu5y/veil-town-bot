@@ -1,10 +1,16 @@
 class Narrator:
     @staticmethod
-    def opening(count, time_left):
+    def opening(player_names, time_left):
+        # Format the list of names
+        if not player_names:
+            names_text = "(None)"
+        else:
+            names_text = ", ".join(player_names)
+
         return (
             "🕯️ **Veil Town opens.**\n"
             "The fog descends. The streets are empty.\n\n"
-            f"👥 **Joined:** {count}\n"
+            f"👥 **Joined ({len(player_names)}):** {names_text}\n"
             f"⏳ **Time Remaining:** {time_left}s\n\n"
             "Press **Join** to sign your name."
         )
