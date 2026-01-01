@@ -25,7 +25,7 @@ class GameEngine:
     async def _lobby_loop(self):
         while self.phase == Phase.LOBBY:
             if len(self.state.players) >= MIN_PLAYERS:
-                await asyncio.sleep(5) # Grace period
+                await asyncio.sleep(5)
                 await self.start_game()
                 return
             await asyncio.sleep(2)
@@ -47,20 +47,35 @@ class GameEngine:
         await self.notifier.group(Narrator.night_start())
         await self.notifier.night_controls(self.state)
         
-        # Duration
         await asyncio.sleep(10 if TEST_MODE else 45)
         await self._resolve_night()
 
     async def _resolve_night(self):
+        from core.narrator import Narrator
         deaths = []
         
-        # 1. Processing Guardian
+        # --- NEW WATCHER LOGIC ---
+        for uid, action in self.state.night_actions.items():
+            actor = self.state.players[uid]
+            
+            if actor.role_key == "Watcher":
+                target_id = action['target']
+                target = self.state.players.get(target_id)
+                
+                if target:
+                    # Did the target do anything?
+                    target_acted = target_id in self.state.night_actions
+                    msg = Narrator.watcher_result(target.name, target_acted)
+                    await self.notifier.dm(uid, msg)
+        # -------------------------
+
+        # 1. Guardian Logic
         for uid, action in self.state.night_actions.items():
             if self.state.players[uid].role_key == "Guardian":
                 target = self.state.players.get(action['target'])
                 if target: target.is_protected = True
 
-        # 2. Processing Killers (Shade)
+        # 2. Shade Logic
         for uid, action in self.state.night_actions.items():
             actor = self.state.players[uid]
             if actor.role_key == "Shade":
@@ -69,7 +84,6 @@ class GameEngine:
                     target.is_alive = False
                     deaths.append((target.name, target.role.name))
 
-        from core.narrator import Narrator
         await self.notifier.group(Narrator.night_end(deaths))
         
         if self._check_win(): return
@@ -95,7 +109,6 @@ class GameEngine:
         await self._resolve_votes()
 
     async def _resolve_votes(self):
-        # Tally
         counts = {}
         for target_id in self.state.votes.values():
             counts[target_id] = counts.get(target_id, 0) + 1
@@ -103,7 +116,6 @@ class GameEngine:
         executed = None
         if counts:
             victim_id = max(counts, key=counts.get)
-            # Simple majority logic for now
             if counts[victim_id] > len(self.state.votes) / 2: 
                 victim = self.state.players[victim_id]
                 victim.is_alive = False
@@ -116,7 +128,6 @@ class GameEngine:
         await self._run_night()
 
     def _check_win(self):
-        # Simplified win check
         alive_veil = sum(1 for p in self.state.players.values() if p.role.faction == Faction.VEIL and p.is_alive)
         alive_total = sum(1 for p in self.state.players.values() if p.is_alive)
         
