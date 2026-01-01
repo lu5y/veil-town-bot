@@ -2,12 +2,14 @@ import logging
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler
 from config import BOT_TOKEN
 
-# This block imports ALL the functions you just added to handlers.py
+# Import the new commands
 from telegram_ui.handlers import (
     cmd_start_game, 
     cmd_force_start, 
     cmd_players, 
     cmd_extend, 
+    cmd_role,   # NEW
+    cmd_help,   # NEW
     cb_join, 
     cb_handle_input
 )
@@ -23,9 +25,14 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler('players', cmd_players))
     app.add_handler(CommandHandler('extend', cmd_extend))
     
-    # Universal Callback Handler (Joins, Night Actions, Votes)
+    # Private Commands
+    app.add_handler(CommandHandler('role', cmd_role))
+    app.add_handler(CommandHandler('help', cmd_help))
+    
+    # Buttons
     app.add_handler(CallbackQueryHandler(cb_join, pattern="^join$"))
     app.add_handler(CallbackQueryHandler(cb_handle_input))
     
     print("Veil Town is listening...")
     app.run_polling()
+    
