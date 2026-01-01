@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 from enum import Enum, auto
 from config import TEST_MODE, MIN_PLAYERS
 from game.roles import Faction
@@ -16,18 +17,39 @@ class GameEngine:
         self.notifier = notifier
         self.phase = Phase.LOBBY
         self.task = None
+        self.lobby_started_at = None # New tracker
 
     async def start_lobby(self):
         from core.narrator import Narrator
-        await self.notifier.group(Narrator.opening())
+        self.lobby_started_at = datetime.now() # Start the clock
+        
+        # Initial message
+        await self.notifier.group(Narrator.opening(0, 120)) 
         self.task = asyncio.create_task(self._lobby_loop())
 
+    def get_time_left(self):
+        """Calculates seconds remaining in the lobby."""
+        if not self.lobby_started_at:
+            return 0
+        elapsed = (datetime.now() - self.lobby_started_at).seconds
+        duration = 120 # Standard lobby time
+        return max(0, duration - elapsed)
+
     async def _lobby_loop(self):
+        # We check every 2 seconds
         while self.phase == Phase.LOBBY:
-            if len(self.state.players) >= MIN_PLAYERS:
-                await asyncio.sleep(5)
-                await self.start_game()
-                return
+            time_left = self.get_time_left()
+            
+            # Auto-start if time is up AND we have minimum players
+            if time_left <= 0:
+                if len(self.state.players) >= MIN_PLAYERS:
+                    await self.start_game()
+                    return
+                else:
+                    # Reset timer if not enough players (optional, or just kill it)
+                    # For now, we extend slightly to give a chance
+                    self.lobby_started_at = datetime.now()
+            
             await asyncio.sleep(2)
 
     async def force_start(self):
@@ -35,6 +57,7 @@ class GameEngine:
             await self.start_game()
 
     async def start_game(self):
+        self.phase = Phase.ROLE_ASSIGNMENT # Mark as busy immediately
         self.state.assign_roles()
         await self.notifier.send_roles(self.state)
         await self._run_night()
@@ -54,20 +77,16 @@ class GameEngine:
         from core.narrator import Narrator
         deaths = []
         
-        # --- NEW WATCHER LOGIC ---
+        # --- WATCHER LOGIC ---
         for uid, action in self.state.night_actions.items():
             actor = self.state.players[uid]
-            
             if actor.role_key == "Watcher":
                 target_id = action['target']
                 target = self.state.players.get(target_id)
-                
                 if target:
-                    # Did the target do anything?
                     target_acted = target_id in self.state.night_actions
                     msg = Narrator.watcher_result(target.name, target_acted)
                     await self.notifier.dm(uid, msg)
-        # -------------------------
 
         # 1. Guardian Logic
         for uid, action in self.state.night_actions.items():
@@ -85,7 +104,6 @@ class GameEngine:
                     deaths.append((target.name, target.role.name))
 
         await self.notifier.group(Narrator.night_end(deaths))
-        
         if self._check_win(): return
         await self._run_discussion()
 
@@ -93,7 +111,6 @@ class GameEngine:
         self.phase = Phase.DISCUSSION
         from core.narrator import Narrator
         duration = 15 if TEST_MODE else 90
-        
         await self.notifier.group(Narrator.discussion(duration))
         await asyncio.sleep(duration)
         await self._run_voting()
@@ -101,10 +118,8 @@ class GameEngine:
     async def _run_voting(self):
         self.phase = Phase.VOTING
         from core.narrator import Narrator
-        
         await self.notifier.group(Narrator.voting_start())
         await self.notifier.voting_controls(self.state)
-        
         await asyncio.sleep(15 if TEST_MODE else 45)
         await self._resolve_votes()
 
@@ -123,7 +138,6 @@ class GameEngine:
 
         from core.narrator import Narrator
         await self.notifier.group(Narrator.execution_result(executed[0] if executed else None, executed[1] if executed else None))
-        
         if self._check_win(): return
         await self._run_night()
 
