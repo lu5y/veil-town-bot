@@ -1,14 +1,22 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from game.models import GameState, Player
-from core.game_engine import GameEngine
+from core.game_engine import GameEngine, Phase  # Added Phase import
 from core.notifier import Notifier
 
 SESSIONS = {}
 
 async def cmd_start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    if chat_id in SESSIONS: return # Game exists
+    
+    # --- NEW RESTART LOGIC ---
+    if chat_id in SESSIONS:
+        state, engine = SESSIONS[chat_id]
+        # If the game is NOT over, ignore the command (don't interrupt)
+        if engine.phase != Phase.GAME_OVER:
+            return 
+        # If game IS over, we proceed and overwrite the old session
+    # -------------------------
     
     state = GameState(chat_id)
     notifier = Notifier(context.bot, chat_id)
@@ -21,7 +29,6 @@ async def cmd_start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_force_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    # Only admins should really do this, but for now we check session existence
     if chat_id not in SESSIONS: return
     
     _, engine = SESSIONS[chat_id]
@@ -42,7 +49,6 @@ async def cmd_extend(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id not in SESSIONS: return
     
     await context.bot.send_message(chat_id, "⏳ Time extended.")
-    # (Logic to extend timer would hook into engine here if implemented)
 
 async def cb_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -54,6 +60,10 @@ async def cb_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id not in SESSIONS: return
     state, engine = SESSIONS[chat_id]
     
+    # Prevent joining if game is already running (not in Lobby)
+    if engine.phase != Phase.LOBBY:
+        return
+
     if user.id not in state.players:
         state.players[user.id] = Player(user.id, user.first_name)
         await context.bot.send_message(chat_id, f"{user.first_name} enters.")
@@ -82,4 +92,4 @@ async def cb_handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("vote:"):
         target = int(data.split(":")[1])
         state.votes[user_id] = target
-        # Do not edit message in group, keep anonymity
+    
