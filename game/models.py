@@ -1,167 +1,62 @@
-from enum import Enum, auto
-from collections import defaultdict, Counter
 import random
+from .roles import ROLES, Faction
 
-
-# ----------------------------
-# PHASE ENUM (ENGINE USES THIS)
-# ----------------------------
-class Phase(Enum):
-    WAITING = auto()
-    RUNNING = auto()
-    ENDED = auto()
-
-
-# ----------------------------
-# PLAYER
-# ----------------------------
 class Player:
-    def __init__(self, user_id: int, name: str):
+    def __init__(self, user_id, name):
         self.user_id = user_id
         self.name = name
-        self.role = None
-        self.alive = True
+        self.role_key = None # String key from ROLES dict
+        self.is_alive = True
+        self.targeted_count = 0 # For Stranger
+        self.is_protected = False # For Guardian
 
-        # tracking
-        self.missed_actions = 0
-        self.missed_votes = 0
+    @property
+    def role(self):
+        return ROLES[self.role_key] if self.role_key else None
 
-
-# ----------------------------
-# GAME STATE (TRUTH)
-# ----------------------------
 class GameState:
-    def __init__(self, chat_id: int):
+    def __init__(self, chat_id):
         self.chat_id = chat_id
+        self.players = {} # user_id -> Player
+        self.votes = {}   # voter_id -> target_id
+        self.night_actions = {} # actor_id -> {type: str, target: int}
+        self.night_count = 0
+        self.winner = None
+        self.history = [] # For Archivist
 
-        self.players: dict[int, Player] = {}
-        self.phase = Phase.WAITING
+    def assign_roles(self):
+        # Simplified distribution logic for brevity/robustness
+        keys = list(self.players.keys())
+        random.shuffle(keys)
+        
+        # Hardcoded distribution based on player count for balance
+        count = len(keys)
+        role_pool = []
+        
+        if count == 1: # Test Mode
+            role_pool = ["Shade"] 
+        elif count <= 5:
+            role_pool = ["Shade", "Watcher", "Citizen", "Citizen", "Citizen"]
+        else:
+            # Dynamic generation can go here, using a fixed list for stability now
+            role_pool = ["Shade", "Whisperer", "Guardian", "Watcher", "Citizen", "Citizen"]
+            while len(role_pool) < count:
+                role_pool.append("Citizen")
 
-        # night
-        self.night_actions = {}      # actor_id -> target_id
-        self.last_night_deaths = []
+        for i, uid in enumerate(keys):
+            role_name = role_pool[i] if i < len(role_pool) else "Citizen"
+            self.players[uid].role_key = role_name
 
-        # voting
-        self.votes = {}              # voter_id -> target_id
-
-        # flags
-        self.started = False
-
-    # ----------------------------
-    # PLAYER HELPERS
-    # ----------------------------
-    def alive_players(self):
-        return [p for p in self.players.values() if p.alive]
-
-    def dead_players(self):
-        return [p for p in self.players.values() if not p.alive]
-
-    def get_player(self, user_id):
-        return self.players.get(user_id)
-
-    # ----------------------------
-    # ROLE ASSIGNMENT
-    # ----------------------------
-    def assign_roles(self, roles):
-        shuffled_roles = roles[:]
-        random.shuffle(shuffled_roles)
-
-        for player, role in zip(self.players.values(), shuffled_roles):
-            player.role = role
-
-        self.started = True
-
-    # ----------------------------
-    # NIGHT ACTIONS
-    # ----------------------------
-    def record_night_action(self, actor_id, target_id):
-        self.night_actions[actor_id] = target_id
-
-    def resolve_night(self):
-        """
-        Very simple resolution for now.
-        Later, actions.py will expand this.
-        """
-        self.last_night_deaths.clear()
-
-        kill_targets = []
-
-        for actor_id, target_id in self.night_actions.items():
-            actor = self.players.get(actor_id)
+    def record_night_action(self, actor_id, target_id, action_type):
+        if self.players[actor_id].is_alive:
+            self.night_actions[actor_id] = {"target": target_id, "type": action_type}
+            
             target = self.players.get(target_id)
+            if target:
+                target.targeted_count += 1
 
-            if not actor or not target:
-                continue
-
-            if actor.role.can_kill:
-                kill_targets.append(target)
-
-        # Apply deaths (no protection yet)
-        for victim in kill_targets:
-            if victim.alive:
-                victim.alive = False
-                self.last_night_deaths.append(victim)
-
-        self.night_actions.clear()
-        return self.last_night_deaths
-
-    def last_night_deaths(self):
-        return self.last_night_deaths
-
-    # ----------------------------
-    # VOTING
-    # ----------------------------
-    def record_vote(self, voter_id, target_id):
-        self.votes[voter_id] = target_id
-
-    def resolve_votes(self):
-        if not self.votes:
-            return None
-
-        counter = Counter(self.votes.values())
-        target_id, _ = counter.most_common(1)[0]
-
-        target = self.players.get(target_id)
-        if target and target.alive:
-            target.alive = False
-
-        self.votes.clear()
-        return target
-
-    # ----------------------------
-    # WIN CONDITIONS
-    # ----------------------------
-    def check_win(self):
-        alive = self.alive_players()
-        return len(alive) <= 2
-
-    def endgame_summary(self):
-        alive = self.alive_players()
-        dead = self.dead_players()
-
-        text = "🩸 **The Veil Lifts.**\n\n"
-
-        if alive:
-            text += "**Alive:**\n"
-            for p in alive:
-                text += f"– {p.name}\n"
-
-        if dead:
-            text += "\n**Dead:**\n"
-            for p in dead:
-                text += f"– {p.name}\n"
-
-        text += "\nThe town does not recover."
-
-        return text
-
-    # ----------------------------
-    # RESET
-    # ----------------------------
-    def reset(self):
-        self.players.clear()
-        self.night_actions.clear()
-        self.votes.clear()
-        self.last_night_deaths.clear()
-        self.phase = Phase.WAITING
-        self.started = False
+    def reset_daily(self):
+        self.votes = {}
+        self.night_actions = {}
+        for p in self.players.values():
+            p.is_protected = False
