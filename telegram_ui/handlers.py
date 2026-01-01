@@ -21,6 +21,7 @@ async def cmd_start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id in SESSIONS:
         state, engine = SESSIONS[chat_id]
         if engine.phase != Phase.GAME_OVER:
+            await context.bot.send_message(chat_id, "⚠️ A game is already running. Use /killgame to force stop it.")
             return 
     
     state = GameState(chat_id)
@@ -31,6 +32,15 @@ async def cmd_start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     join_btn = InlineKeyboardMarkup([[InlineKeyboardButton("Join Veil Town", callback_data="join")]])
     await context.bot.send_message(chat_id, Narrator.opening(), reply_markup=join_btn, parse_mode='Markdown')
     await engine.start_lobby()
+
+async def cmd_kill_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Forcefully removes the game session."""
+    chat_id = update.effective_chat.id
+    if chat_id in SESSIONS:
+        del SESSIONS[chat_id]
+        await context.bot.send_message(chat_id, "💀 **Game killed.** State wiped. You may start anew.")
+    else:
+        await context.bot.send_message(chat_id, "No active game found to kill.")
 
 async def cmd_force_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -51,7 +61,7 @@ async def cmd_extend(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id not in SESSIONS: return
     await context.bot.send_message(chat_id, "⏳ **Time extended.**", parse_mode='Markdown')
 
-# --- PRIVATE COMMANDS (NEW) ---
+# --- PRIVATE COMMANDS ---
 
 async def cmd_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -81,36 +91,53 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cb_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    
     chat_id = update.effective_chat.id
     user = query.from_user
     
-    if chat_id not in SESSIONS: return
+    # ERROR HANDLING: If bot restarted, session is gone
+    if chat_id not in SESSIONS:
+        await query.answer("This game has expired. Start a new one with /startgame", show_alert=True)
+        return
+
     state, engine = SESSIONS[chat_id]
     
-    if engine.phase != Phase.LOBBY: return
+    if engine.phase != Phase.LOBBY:
+        await query.answer("Game has already started!", show_alert=True)
+        return
 
     if user.id not in state.players:
         state.players[user.id] = Player(user.id, user.first_name)
-        # Using a quieter confirmation (toast notification) instead of spamming group
-        await context.bot.answer_callback_query(query.id, text=f"Welcome to Veil Town, {user.first_name}.")
+        await query.answer(f"Welcome to Veil Town, {user.first_name}.")
+        # Optional: Send a visible message so others see the join count
+        # await context.bot.send_message(chat_id, f"{user.first_name} enters.")
+    else:
+        await query.answer("You are already in.")
 
 async def cb_handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
     data = query.data
     user_id = query.from_user.id
     
     state, _ = find_session(user_id)
-    if not state: return
+    
+    # ERROR HANDLING: If session is missing (bot restarted)
+    if not state:
+        await query.answer("Session not found. The town has faded.", show_alert=True)
+        return
     
     if data.startswith("night:"):
-        target = int(data.split(":")[1])
-        state.record_night_action(user_id, target, "generic") 
-        await query.edit_message_text("🌑 Choice locked in darkness.")
+        try:
+            target = int(data.split(":")[1])
+            state.record_night_action(user_id, target, "generic") 
+            await query.edit_message_text("🌑 Choice locked in darkness.")
+            await query.answer() # Close the load spinner
+        except Exception:
+            await query.answer("Error recording action.", show_alert=True)
         
     elif data.startswith("vote:"):
         target = int(data.split(":")[1])
         state.votes[user_id] = target
-        # Silent confirmation for votes to keep suspense
-    
+        await query.answer("Vote cast.") # Feedback to user
+        # We do NOT edit the message here to keep votes secret until the end
+        
