@@ -1,140 +1,78 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
+from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
 class Notifier:
-    def __init__(self, bot, chat_id):
-        self.bot = bot
+    def __init__(self, application, chat_id):
+        """
+        application: telegram.ext.Application
+        chat_id: group chat id
+        """
+        self.app = application
         self.chat_id = chat_id
 
-    # ----------------------------
-    # BASIC OUTPUT
-    # ----------------------------
+    # -------------------------------------------------
+    # BASIC GROUP MESSAGE
+    # -------------------------------------------------
     async def group(self, text):
-        await self.bot.send_message(
+        await self.app.bot.send_message(
             chat_id=self.chat_id,
-            text=text,
-            parse_mode="Markdown"
+            text=text
         )
 
-    async def dm(self, user_id, text, buttons=None):
-        await self.bot.send_message(
-            chat_id=user_id,
-            text=text,
-            reply_markup=buttons
-        )
-
-    # ----------------------------
-    # ROLE ASSIGNMENT
-    # ----------------------------
-    async def assign_roles(self, session):
-        for player in session.players.values():
-            await self.dm(
-                player.user_id,
-                f"🕯 **Your role**\n\n"
-                f"You are **{player.role.name}**.\n\n"
-                f"{player.role.description}"
-            )
-
-    # ----------------------------
-    # NIGHT ACTIONS
-    # ----------------------------
-    async def open_night_actions(self, session):
-        for player in session.alive_players():
-            if not player.role.has_night_action:
-                continue
-
-            buttons = self._build_target_buttons(
-                session,
-                callback_prefix="night",
-                exclude=player.user_id
-            )
-
-            await self.dm(
-                player.user_id,
-                "🌑 **Night Action**\n"
-                "Choose one target.\n"
-                "Your decision is final.",
-                buttons
-            )
-
-    async def resolve_night(self, session):
-        result = session.resolve_night()
-        if result:
-            await self.group(result)
-
-    # ----------------------------
-    # DAWN
-    # ----------------------------
-    async def announce_dawn(self, session):
-        deaths = session.last_night_deaths()
-
-        if not deaths:
-            await self.group(
-                "🌅 **Dawn breaks.**\n"
-                "Everyone returns — for now."
-            )
-            return
-
-        for player in deaths:
-            await self.group(
-                f"🩸 **{player.name} is dead.**\n"
-                "No explanation is given."
-            )
-
-    # ----------------------------
-    # VOTING
-    # ----------------------------
-    async def open_voting(self, session):
-        for player in session.alive_players():
-            buttons = self._build_target_buttons(
-                session,
-                callback_prefix="vote",
-                exclude=player.user_id
-            )
-
-            await self.dm(
-                player.user_id,
-                "⚖️ **Judgment**\n"
-                "Choose who must be cast out.",
-                buttons
-            )
-
-    async def resolve_votes(self, session):
-        executed = session.resolve_votes()
-
-        if not executed:
-            await self.group(
-                "⚖️ **Judgment passes.**\n"
-                "No one is executed."
-            )
-            return
-
+    # -------------------------------------------------
+    # GAME FLOW ANNOUNCEMENTS
+    # -------------------------------------------------
+    async def announce_game_start(self, min_players):
         await self.group(
-            f"⚖️ **Judgment is passed.**\n"
-            f"**{executed.name} is executed.**"
+            "🕯️ *The Veil stirs…*\n"
+            "A new game is forming.\n\n"
+            f"Minimum players: {min_players}\n"
+            "Press /join to enter."
         )
 
-    # ----------------------------
-    # END GAME
-    # ----------------------------
-    async def announce_winner(self, session):
-        await self.group(session.endgame_summary())
+    async def announce_roles_assigning(self):
+        await self.group(
+            "🎭 *Roles are being assigned…*\n"
+            "Check your private messages."
+        )
 
-    # ----------------------------
-    # BUTTON UTILS
-    # ----------------------------
-    def _build_target_buttons(self, session, callback_prefix, exclude=None):
-        rows = []
+    async def announce_night(self):
+        await self.group(
+            "🌑 *Night falls over Veil Town.*\n"
+            "Those who act in darkness may now choose."
+        )
 
-        for player in session.alive_players():
-            if exclude and player.user_id == exclude:
-                continue
+    async def announce_dawn(self):
+        await self.group(
+            "🌅 *Dawn breaks.*\n"
+            "The town gathers to face the truth."
+        )
 
-            rows.append([
-                InlineKeyboardButton(
-                    text=player.name,
-                    callback_data=f"{callback_prefix}:{player.user_id}"
-                )
-            ])
+    async def announce_discussion(self, seconds):
+        await self.group(
+            f"💬 *Discussion Phase*\n"
+            f"You have {seconds} seconds to speak."
+        )
 
-        return InlineKeyboardMarkup(rows)
+    async def open_voting(self, alive_players):
+        await self.group(
+            "🗳️ *Voting has begun.*\n"
+            "Choose wisely."
+        )
+
+    async def resolve_votes(self, executed_player=None):
+        if executed_player:
+            await self.group(
+                f"⚖️ *Judgment is passed.*\n"
+                f"**{executed_player.name}** has been executed."
+            )
+        else:
+            await self.group(
+                "⚖️ *Judgment fails.*\n"
+                "No consensus was reached."
+            )
+
+    async def announce_winner(self, winning_faction):
+        await self.group(
+            f"🏁 *Game Over*\n"
+            f"**{winning_faction}** has won the game."
+        )
