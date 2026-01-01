@@ -1,16 +1,18 @@
 class Narrator:
     @staticmethod
     def opening(player_names, time_left):
-        # Format the list of names
+        # Format: Vertical list like in your screenshot
         if not player_names:
-            names_text = "(None)"
+            list_text = "(Waiting for players...)"
         else:
-            names_text = ", ".join(player_names)
+            # Creates a vertical list with bullet points
+            list_text = "\n".join([f"• {name}" for name in player_names])
 
         return (
             "🕯️ **Veil Town opens.**\n"
             "The fog descends. The streets are empty.\n\n"
-            f"👥 **Joined ({len(player_names)}):** {names_text}\n"
+            f"#players: {len(player_names)}\n"
+            f"{list_text}\n\n"
             f"⏳ **Time Remaining:** {time_left}s\n\n"
             "Press **Join** to sign your name."
         )
