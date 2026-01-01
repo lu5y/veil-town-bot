@@ -1,200 +1,131 @@
 import asyncio
 from enum import Enum, auto
-from datetime import datetime, timedelta
-
+from config import TEST_MODE, MIN_PLAYERS
+from game.roles import Faction
 
 class Phase(Enum):
-    WAITING = auto()
-    ROLE_ASSIGNMENT = auto()
+    LOBBY = auto()
     NIGHT = auto()
-    NIGHT_RESOLUTION = auto()
-    DAWN = auto()
     DISCUSSION = auto()
     VOTING = auto()
-    JUDGMENT = auto()
     GAME_OVER = auto()
 
-
 class GameEngine:
-    def __init__(self, session, notifier):
-        """
-        session  = GameState (truth storage)
-        notifier = object that sends messages (group / dm)
-        """
-        self.session = session
+    def __init__(self, state, notifier):
+        self.state = state
         self.notifier = notifier
-        self.phase = Phase.WAITING
-        self.phase_task = None
-        self.started_at = None
+        self.phase = Phase.LOBBY
+        self.task = None
 
-        # timing (seconds)
-        self.MIN_PLAYERS = 6
-        self.WAIT_DURATION = 120
-        self.EXTENSION_DURATION = 60
-        self.NIGHT_DURATION = 45
-        self.DISCUSSION_DURATION = 90
-        self.VOTING_DURATION = 45
-
-        self.wait_extended = False
-
-    # ----------------------------
-    # ENTRY POINT
-    # ----------------------------
     async def start_lobby(self):
-        self.phase = Phase.WAITING
-        self.started_at = datetime.utcnow()
+        from core.narrator import Narrator
+        await self.notifier.group(Narrator.opening())
+        self.task = asyncio.create_task(self._lobby_loop())
 
-        await self.notifier.group(
-            "🕯️ **The Veil stirs…**\n"
-            "A new game is forming.\n\n"
-            f"Minimum players: **{self.MIN_PLAYERS}**\n"
-            "Press **Join** to enter."
-        )
-
-        self.phase_task = asyncio.create_task(self._wait_loop())
-
-    # ----------------------------
-    # WAITING PHASE
-    # ----------------------------
-    async def _wait_loop(self):
-        while self.phase == Phase.WAITING:
-            if len(self.session.players) >= self.MIN_PLAYERS:
-                await self._begin_game()
+    async def _lobby_loop(self):
+        while self.phase == Phase.LOBBY:
+            if len(self.state.players) >= MIN_PLAYERS:
+                await asyncio.sleep(5) # Grace period
+                await self.start_game()
                 return
-
-            elapsed = (datetime.utcnow() - self.started_at).seconds
-            if elapsed >= self.WAIT_DURATION:
-                await self._begin_game()
-                return
-
-            await asyncio.sleep(3)
-
-    async def extend_wait(self):
-        if self.wait_extended:
-            return False
-
-        self.wait_extended = True
-        self.started_at += timedelta(seconds=self.EXTENSION_DURATION)
-
-        await self.notifier.group(
-            "⏳ **The Veil lingers…**\n"
-            "Waiting time extended once."
-        )
-        return True
+            await asyncio.sleep(2)
 
     async def force_start(self):
-        if self.phase != Phase.WAITING:
-            return
+        if self.phase == Phase.LOBBY:
+            await self.start_game()
 
-        await self.notifier.group(
-            "⚖️ **The ritual is forced.**\n"
-            "The game begins immediately."
-        )
-        await self._begin_game()
+    async def start_game(self):
+        self.state.assign_roles()
+        await self.notifier.send_roles(self.state)
+        await self._run_night()
 
-    # ----------------------------
-    # GAME START
-    # ----------------------------
-    async def _begin_game(self):
-        self.phase = Phase.ROLE_ASSIGNMENT
-
-        await self.notifier.group("🎭 **Roles are being assigned…**")
-
-        await self.notifier.assign_roles(self.session)
-
-        await asyncio.sleep(3)
-        await self._night_phase()
-
-    # ----------------------------
-    # NIGHT
-    # ----------------------------
-    async def _night_phase(self):
+    async def _run_night(self):
         self.phase = Phase.NIGHT
-
-        await self.notifier.group(
-            "🌑 **Night falls.**\n"
-            "Close your eyes.\n"
-            "Those who act will be summoned."
-        )
-
-        await self.notifier.open_night_actions(self.session)
-
-        await asyncio.sleep(self.NIGHT_DURATION)
+        from core.narrator import Narrator
+        
+        self.state.reset_daily()
+        await self.notifier.group(Narrator.night_start())
+        await self.notifier.night_controls(self.state)
+        
+        # Duration
+        await asyncio.sleep(10 if TEST_MODE else 45)
         await self._resolve_night()
 
-    # ----------------------------
-    # NIGHT RESOLUTION
-    # ----------------------------
     async def _resolve_night(self):
-        self.phase = Phase.NIGHT_RESOLUTION
+        deaths = []
+        
+        # 1. Processing Guardian
+        for uid, action in self.state.night_actions.items():
+            if self.state.players[uid].role_key == "Guardian":
+                target = self.state.players.get(action['target'])
+                if target: target.is_protected = True
 
-        await self.notifier.resolve_night(self.session)
+        # 2. Processing Killers (Shade)
+        for uid, action in self.state.night_actions.items():
+            actor = self.state.players[uid]
+            if actor.role_key == "Shade":
+                target = self.state.players.get(action['target'])
+                if target and not target.is_protected:
+                    target.is_alive = False
+                    deaths.append((target.name, target.role.name))
 
-        await asyncio.sleep(2)
-        await self._dawn()
+        from core.narrator import Narrator
+        await self.notifier.group(Narrator.night_end(deaths))
+        
+        if self._check_win(): return
+        await self._run_discussion()
 
-    # ----------------------------
-    # DAWN
-    # ----------------------------
-    async def _dawn(self):
-        self.phase = Phase.DAWN
-
-        await self.notifier.announce_dawn(self.session)
-
-        if self.session.check_win():
-            await self._end_game()
-            return
-
-        await asyncio.sleep(3)
-        await self._discussion()
-
-    # ----------------------------
-    # DISCUSSION
-    # ----------------------------
-    async def _discussion(self):
+    async def _run_discussion(self):
         self.phase = Phase.DISCUSSION
+        from core.narrator import Narrator
+        duration = 15 if TEST_MODE else 90
+        
+        await self.notifier.group(Narrator.discussion(duration))
+        await asyncio.sleep(duration)
+        await self._run_voting()
 
-        await self.notifier.group(
-            "☀️ **Day breaks.**\n"
-            "Speak carefully.\n"
-            f"You have **{self.DISCUSSION_DURATION} seconds**."
-        )
-
-        await asyncio.sleep(self.DISCUSSION_DURATION)
-        await self._voting()
-
-    # ----------------------------
-    # VOTING
-    # ----------------------------
-    async def _voting(self):
+    async def _run_voting(self):
         self.phase = Phase.VOTING
+        from core.narrator import Narrator
+        
+        await self.notifier.group(Narrator.voting_start())
+        await self.notifier.voting_controls(self.state)
+        
+        await asyncio.sleep(15 if TEST_MODE else 45)
+        await self._resolve_votes()
 
-        await self.notifier.open_voting(self.session)
+    async def _resolve_votes(self):
+        # Tally
+        counts = {}
+        for target_id in self.state.votes.values():
+            counts[target_id] = counts.get(target_id, 0) + 1
+            
+        executed = None
+        if counts:
+            victim_id = max(counts, key=counts.get)
+            # Simple majority logic for now
+            if counts[victim_id] > len(self.state.votes) / 2: 
+                victim = self.state.players[victim_id]
+                victim.is_alive = False
+                executed = (victim.name, victim.role.name)
 
-        await asyncio.sleep(self.VOTING_DURATION)
-        await self._judgment()
+        from core.narrator import Narrator
+        await self.notifier.group(Narrator.execution_result(executed[0] if executed else None, executed[1] if executed else None))
+        
+        if self._check_win(): return
+        await self._run_night()
 
-    # ----------------------------
-    # JUDGMENT
-    # ----------------------------
-    async def _judgment(self):
-        self.phase = Phase.JUDGMENT
-
-        await self.notifier.resolve_votes(self.session)
-
-        if self.session.check_win():
-            await self._end_game()
-            return
-
-        await asyncio.sleep(3)
-        await self._night_phase()
-
-    # ----------------------------
-    # END GAME
-    # ----------------------------
-    async def _end_game(self):
-        self.phase = Phase.GAME_OVER
-
-        await self.notifier.announce_winner(self.session)
-
-        self.session.reset()
+    def _check_win(self):
+        # Simplified win check
+        alive_veil = sum(1 for p in self.state.players.values() if p.role.faction == Faction.VEIL and p.is_alive)
+        alive_total = sum(1 for p in self.state.players.values() if p.is_alive)
+        
+        if alive_veil == 0:
+            asyncio.create_task(self.notifier.group("🏁 **Town Wins.**"))
+            self.phase = Phase.GAME_OVER
+            return True
+        if alive_veil >= alive_total / 2:
+            asyncio.create_task(self.notifier.group("🏁 **The Veil Consumes.**"))
+            self.phase = Phase.GAME_OVER
+            return True
+        return False
