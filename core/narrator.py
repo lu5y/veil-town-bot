@@ -43,6 +43,12 @@ class Narrator:
         return text
 
     @staticmethod
+    def watcher_result(target_name, acted):
+        if acted:
+            return f"👁️ **Observation:**\nYou watched {target_name} closely.\nThey left their home tonight."
+        return f"👁️ **Observation:**\nYou watched {target_name}.\nThey stayed home."
+
+    @staticmethod
     def discussion(seconds):
         return (
             f"☀️ **The Town Gathers.**\n"
@@ -74,7 +80,6 @@ class Narrator:
     
     @staticmethod
     def help_text(phase):
-        # A helper for the /help command
         from core.game_engine import Phase
         if phase == Phase.LOBBY:
             return "We are gathering souls. Tell friends to join."
@@ -85,4 +90,3 @@ class Narrator:
         if phase == Phase.VOTING:
             return "The vote is mandatory. Click a button to choose."
         return "The Veil is quiet."
-        
