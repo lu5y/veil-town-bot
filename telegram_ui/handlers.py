@@ -23,15 +23,15 @@ async def cmd_start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     logger.info(f"Command /startgame received in {chat.id}")
     
-    # 1. BLOCK PRIVATE CHATS
+    # Block Private DMs
     if chat.type == ChatType.PRIVATE:
-        await context.bot.send_message(chat.id, "🚫 **Veil Town must be played in a group.**\nAdd me to a group chat to begin.")
+        await context.bot.send_message(chat.id, "🚫 **Groups only.**\nAdd me to a group to play.")
         return
 
     if chat.id in SESSIONS:
         state, engine = SESSIONS[chat.id]
         if engine.phase != Phase.GAME_OVER:
-            await context.bot.send_message(chat.id, "⚠️ **Game Running.**\nUse /killgame to stop it first.")
+            await context.bot.send_message(chat.id, "⚠️ **Game Running.**\nUse /killgame first.")
             return 
     
     state = GameState(chat.id)
@@ -41,7 +41,7 @@ async def cmd_start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     join_btn = InlineKeyboardMarkup([[InlineKeyboardButton("Join Veil Town", callback_data="join")]])
     
-    # Send opening with 0 players and 120s
+    # Uses correct Narrator.opening arguments now
     await context.bot.send_message(chat.id, Narrator.opening(0, 120), reply_markup=join_btn, parse_mode='Markdown')
     await engine.start_lobby()
 
@@ -49,14 +49,20 @@ async def cmd_kill_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if chat_id in SESSIONS:
         del SESSIONS[chat_id]
-        await context.bot.send_message(chat_id, "💀 **Game killed.** State wiped.")
+        await context.bot.send_message(chat_id, "💀 **Game killed.**")
     else:
-        await context.bot.send_message(chat_id, "ℹ️ No active game found.")
+        await context.bot.send_message(chat_id, "ℹ️ No game found.")
 
 async def cmd_force_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if chat_id not in SESSIONS: return
-    _, engine = SESSIONS[chat_id]
+    state, engine = SESSIONS[chat_id]
+    
+    # SAFETY CHECK: Don't start empty games
+    if len(state.players) == 0:
+        await context.bot.send_message(chat_id, "⚠️ **Town is empty.**\nWait for players to Join.")
+        return
+        
     await engine.force_start()
 
 async def cmd_players(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -70,7 +76,7 @@ async def cmd_players(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_extend(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if chat_id not in SESSIONS: return
-    await context.bot.send_message(chat_id, "⏳ **Time extended.**", parse_mode='Markdown')
+    await context.bot.send_message(chat_id, "⏳ **Time extended.**")
 
 async def cmd_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -99,20 +105,17 @@ async def cb_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state, engine = SESSIONS[chat_id]
     
     if engine.phase != Phase.LOBBY:
-        await query.answer("Game already started!", show_alert=True)
+        await query.answer("Too late to join!", show_alert=True)
         return
 
-    # Add Player
     if user.id not in state.players:
         state.players[user.id] = Player(user.id, user.first_name)
         await query.answer(f"Welcome, {user.first_name}.")
         
-        # --- UPDATE LOBBY MESSAGE ---
-        # Calculate live stats
+        # Update Lobby UI
         count = len(state.players)
         time_left = engine.get_time_left()
         
-        # Edit the message text
         try:
             join_btn = InlineKeyboardMarkup([[InlineKeyboardButton("Join Veil Town", callback_data="join")]])
             await query.edit_message_text(
@@ -120,8 +123,7 @@ async def cb_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=join_btn,
                 parse_mode='Markdown'
             )
-        except Exception:
-            pass # Ignore errors if edit fails (e.g. rate limit)
+        except: pass
     else:
         await query.answer("You are already in.")
 
@@ -141,8 +143,7 @@ async def cb_handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             target = int(data.split(":")[1])
             state.record_night_action(user_id, target, "generic") 
             await query.edit_message_text("🌑 Choice locked.")
-            await query.answer()
-        except: await query.answer("Error.", show_alert=True)
+        except: pass
         
     elif data.startswith("vote:"):
         target = int(data.split(":")[1])
