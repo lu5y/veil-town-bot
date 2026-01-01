@@ -1,9 +1,14 @@
 import asyncio
+import logging
 from datetime import datetime
 from enum import Enum, auto
 from config import TEST_MODE, MIN_PLAYERS
 from game.roles import Faction
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest # Import error handling
+
+# Setup logger to see errors in Railway console
+logger = logging.getLogger(__name__)
 
 class Phase(Enum):
     LOBBY = auto()
@@ -19,7 +24,7 @@ class GameEngine:
         self.phase = Phase.LOBBY
         self.task = None
         self.lobby_started_at = None
-        self.lobby_message_id = None # <--- STORES THE MESSAGE ID
+        self.lobby_message_id = None
 
     async def start_lobby(self, message_id):
         self.lobby_message_id = message_id
@@ -38,13 +43,13 @@ class GameEngine:
         from core.narrator import Narrator
         
         while self.phase == Phase.LOBBY:
-            # 1. Update the Message every 5 seconds (not 30, so it feels responsive)
             try:
                 time_left = self.get_time_left()
                 names = [p.name for p in self.state.players.values()]
                 
-                # Use the notifier to edit the existing message
                 join_btn = InlineKeyboardMarkup([[InlineKeyboardButton("Join Veil Town", callback_data="join")]])
+                
+                # Try to edit the message
                 await self.notifier.bot.edit_message_text(
                     chat_id=self.state.chat_id,
                     message_id=self.lobby_message_id,
@@ -52,10 +57,16 @@ class GameEngine:
                     reply_markup=join_btn,
                     parse_mode='Markdown'
                 )
+            except BadRequest as e:
+                # THIS FIXES THE STUCK TIMER
+                if "message is not modified" in str(e).lower():
+                    pass # Ignore this specific error, it just means time didn't change enough yet
+                else:
+                    logger.error(f"Lobby UI Error: {e}")
             except Exception as e:
-                print(f"Lobby update failed: {e}")
+                logger.error(f"Critical Loop Error: {e}")
 
-            # 2. Check Auto-Start
+            # Auto-Start Logic
             if time_left <= 0:
                 if len(self.state.players) >= MIN_PLAYERS:
                     await self.start_game()
@@ -63,12 +74,14 @@ class GameEngine:
                 else:
                     self.lobby_started_at = datetime.now() # Reset timer
             
-            await asyncio.sleep(5) # Update every 5 seconds
+            await asyncio.sleep(5)
 
     async def force_start(self):
+        # Cancel the timer loop so it doesn't fight the game start
+        if self.task:
+            self.task.cancel()
+            
         if self.phase == Phase.LOBBY:
-            if self.task:
-                self.task.cancel() # Stop the timer loop
             await self.start_game()
 
     async def start_game(self):
