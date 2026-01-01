@@ -132,7 +132,27 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not session:
         return
+async def vote_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
+    data = query.data
+    if not data.startswith("vote:"):
+        return
+
+    target_id = int(data.split(":")[1])
+    voter_id = query.from_user.id
+    chat_id = query.message.chat_id
+
+    session = SESSIONS.get(chat_id)
+    if not session:
+        return
+
+    engine = session["engine"]
+
+    engine.register_vote(voter_id, target_id)
+
+    await query.answer("Your vote has been recorded 🕯️", show_alert=True)
     state, _ = session
 
     # -----------------------------
@@ -172,7 +192,7 @@ def main():
     app.add_handler(CommandHandler("ignite", ignite))
     # buttons
     app.add_handler(CallbackQueryHandler(handle_callback))
-
+    app.add_handler(CallbackQueryHandler(vote_callback))
     print("Veil Town engine is live.")
     app.run_polling()
 
