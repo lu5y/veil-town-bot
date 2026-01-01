@@ -17,37 +17,36 @@ class GameEngine:
         self.notifier = notifier
         self.phase = Phase.LOBBY
         self.task = None
-        self.lobby_started_at = None # New tracker
+        self.lobby_started_at = None
 
     async def start_lobby(self):
         from core.narrator import Narrator
-        self.lobby_started_at = datetime.now() # Start the clock
+        # Start the clock BEFORE sending the message
+        self.lobby_started_at = datetime.now()
         
-        # Initial message
+        # Send initial message (0 players, 120 seconds left)
         await self.notifier.group(Narrator.opening(0, 120)) 
         self.task = asyncio.create_task(self._lobby_loop())
 
     def get_time_left(self):
         """Calculates seconds remaining in the lobby."""
         if not self.lobby_started_at:
-            return 0
+            return 120
         elapsed = (datetime.now() - self.lobby_started_at).seconds
         duration = 120 # Standard lobby time
         return max(0, duration - elapsed)
 
     async def _lobby_loop(self):
-        # We check every 2 seconds
         while self.phase == Phase.LOBBY:
             time_left = self.get_time_left()
             
-            # Auto-start if time is up AND we have minimum players
+            # Auto-start check
             if time_left <= 0:
                 if len(self.state.players) >= MIN_PLAYERS:
                     await self.start_game()
                     return
                 else:
-                    # Reset timer if not enough players (optional, or just kill it)
-                    # For now, we extend slightly to give a chance
+                    # Reset timer if not enough players to avoid crash
                     self.lobby_started_at = datetime.now()
             
             await asyncio.sleep(2)
@@ -57,7 +56,7 @@ class GameEngine:
             await self.start_game()
 
     async def start_game(self):
-        self.phase = Phase.ROLE_ASSIGNMENT # Mark as busy immediately
+        self.phase = Phase.ROLE_ASSIGNMENT
         self.state.assign_roles()
         await self.notifier.send_roles(self.state)
         await self._run_night()
@@ -88,13 +87,13 @@ class GameEngine:
                     msg = Narrator.watcher_result(target.name, target_acted)
                     await self.notifier.dm(uid, msg)
 
-        # 1. Guardian Logic
+        # Guardian Logic
         for uid, action in self.state.night_actions.items():
             if self.state.players[uid].role_key == "Guardian":
                 target = self.state.players.get(action['target'])
                 if target: target.is_protected = True
 
-        # 2. Shade Logic
+        # Shade Logic
         for uid, action in self.state.night_actions.items():
             actor = self.state.players[uid]
             if actor.role_key == "Shade":
