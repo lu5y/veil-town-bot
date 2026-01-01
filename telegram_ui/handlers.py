@@ -21,7 +21,6 @@ def find_session(user_id):
 
 async def cmd_start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
-    logger.info(f"Command /startgame received in {chat.id}")
     
     # Block Private DMs
     if chat.type == ChatType.PRIVATE:
@@ -41,13 +40,26 @@ async def cmd_start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     join_btn = InlineKeyboardMarkup([[InlineKeyboardButton("Join Veil Town", callback_data="join")]])
     
-    # Uses correct Narrator.opening arguments now
-    await context.bot.send_message(chat.id, Narrator.opening(0, 120), reply_markup=join_btn, parse_mode='Markdown')
-    await engine.start_lobby()
+    # 1. Send the Message ONCE
+    msg = await context.bot.send_message(
+        chat.id, 
+        Narrator.opening([], 120), # Empty list initially
+        reply_markup=join_btn, 
+        parse_mode='Markdown'
+    )
+    
+    # 2. Tell the Engine to update THIS message ID
+    await engine.start_lobby(msg.message_id)
 
 async def cmd_kill_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if chat_id in SESSIONS:
+        # Stop the engine loop if it's running
+        try:
+            _, engine = SESSIONS[chat_id]
+            if engine.task: engine.task.cancel()
+        except: pass
+        
         del SESSIONS[chat_id]
         await context.bot.send_message(chat_id, "💀 **Game killed.**")
     else:
@@ -58,9 +70,9 @@ async def cmd_force_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id not in SESSIONS: return
     state, engine = SESSIONS[chat_id]
     
-    # SAFETY CHECK: Don't start empty games
+    # Don't start empty games
     if len(state.players) == 0:
-        await context.bot.send_message(chat_id, "⚠️ **Town is empty.**\nWait for players to Join.")
+        await context.bot.send_message(chat_id, "⚠️ **Town is empty.**")
         return
         
     await engine.force_start()
@@ -105,21 +117,21 @@ async def cb_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state, engine = SESSIONS[chat_id]
     
     if engine.phase != Phase.LOBBY:
-        await query.answer("Too late to join!", show_alert=True)
+        await query.answer("Too late!", show_alert=True)
         return
 
     if user.id not in state.players:
         state.players[user.id] = Player(user.id, user.first_name)
         await query.answer(f"Welcome, {user.first_name}.")
         
-        # Update Lobby UI
-        count = len(state.players)
+        # Immediate UI Update (so you don't have to wait 5s for the name to appear)
+        names = [p.name for p in state.players.values()]
         time_left = engine.get_time_left()
         
         try:
             join_btn = InlineKeyboardMarkup([[InlineKeyboardButton("Join Veil Town", callback_data="join")]])
             await query.edit_message_text(
-                text=Narrator.opening(count, time_left),
+                text=Narrator.opening(names, time_left),
                 reply_markup=join_btn,
                 parse_mode='Markdown'
             )
