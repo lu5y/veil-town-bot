@@ -25,25 +25,21 @@ class GameState:
         self.history = [] # For Archivist
 
     def assign_roles(self):
-        # Simplified distribution logic for brevity/robustness
         keys = list(self.players.keys())
         random.shuffle(keys)
-        
-        # Hardcoded distribution based on player count for balance
         count = len(keys)
-        role_pool = []
         
-        if count == 1: # Test Mode
-            role_pool = ["Shade"] 
-        elif count <= 5:
-            role_pool = ["Shade", "Watcher", "Citizen", "Citizen", "Citizen"]
-        else:
-            # Dynamic generation can go here, using a fixed list for stability now
-            role_pool = ["Shade", "Whisperer", "Guardian", "Watcher", "Citizen", "Citizen"]
-            while len(role_pool) < count:
-                role_pool.append("Citizen")
-
+        # --- SAFE ROLE LIST ---
+        # These are the only roles that function 100% right now.
+        # As you fix more roles (like Whisperer), add them to this list.
+        role_pool = ["Shade", "Watcher", "Guardian"] 
+        
+        # If we have more players than special roles, fill with Citizens
+        while len(role_pool) < count:
+            role_pool.append("Citizen")
+            
         for i, uid in enumerate(keys):
+            # Assign roles safely
             role_name = role_pool[i] if i < len(role_pool) else "Citizen"
             self.players[uid].role_key = role_name
 
