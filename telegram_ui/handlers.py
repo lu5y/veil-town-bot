@@ -1,9 +1,13 @@
+import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from game.models import GameState, Player
 from core.game_engine import GameEngine, Phase
 from core.narrator import Narrator
 from core.notifier import Notifier
+
+# Enable logging to see if commands are hitting the bot
+logger = logging.getLogger(__name__)
 
 SESSIONS = {}
 
@@ -18,10 +22,12 @@ def find_session(user_id):
 
 async def cmd_start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+    logger.info(f"Command /startgame received in {chat_id}")
+    
     if chat_id in SESSIONS:
         state, engine = SESSIONS[chat_id]
         if engine.phase != Phase.GAME_OVER:
-            await context.bot.send_message(chat_id, "⚠️ A game is already running. Use /killgame to force stop it.")
+            await context.bot.send_message(chat_id, "⚠️ **Game Running.**\nUse /killgame to stop it first.")
             return 
     
     state = GameState(chat_id)
@@ -36,11 +42,13 @@ async def cmd_start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_kill_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Forcefully removes the game session."""
     chat_id = update.effective_chat.id
+    logger.info(f"Command /killgame received in {chat_id}")
+    
     if chat_id in SESSIONS:
         del SESSIONS[chat_id]
-        await context.bot.send_message(chat_id, "💀 **Game killed.** State wiped. You may start anew.")
+        await context.bot.send_message(chat_id, "💀 **Game killed.**\nMemory wiped. You may /startgame again.")
     else:
-        await context.bot.send_message(chat_id, "No active game found to kill.")
+        await context.bot.send_message(chat_id, "ℹ️ **No game found.**\nThe town is already empty. You can /startgame.")
 
 async def cmd_force_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -74,43 +82,42 @@ async def cmd_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
     player = state.players[user_id]
     if player.role:
         await context.bot.send_message(user_id, Narrator.role_dm(player.role), parse_mode='Markdown')
-    else:
-        await context.bot.send_message(user_id, "Roles have not been assigned yet.")
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     state, engine = find_session(user_id)
-    
     if not engine:
         await context.bot.send_message(user_id, "You are not in a game.")
         return
-
     await context.bot.send_message(user_id, Narrator.help_text(engine.phase))
 
 # --- BUTTON HANDLERS ---
 
 async def cb_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    
     chat_id = update.effective_chat.id
     user = query.from_user
     
-    # ERROR HANDLING: If bot restarted, session is gone
+    # 1. Check if game exists at all
     if chat_id not in SESSIONS:
-        await query.answer("This game has expired. Start a new one with /startgame", show_alert=True)
+        # This fixes the "Spinning Button" issue when bot restarts
+        try:
+            await query.answer("This game has expired. /startgame to play.", show_alert=True)
+        except:
+            pass # Ignore connection errors
         return
 
     state, engine = SESSIONS[chat_id]
     
+    # 2. Check phase
     if engine.phase != Phase.LOBBY:
         await query.answer("Game has already started!", show_alert=True)
         return
 
+    # 3. Add Player
     if user.id not in state.players:
         state.players[user.id] = Player(user.id, user.first_name)
-        await query.answer(f"Welcome to Veil Town, {user.first_name}.")
-        # Optional: Send a visible message so others see the join count
-        # await context.bot.send_message(chat_id, f"{user.first_name} enters.")
+        await query.answer(f"Welcome, {user.first_name}.")
     else:
         await query.answer("You are already in.")
 
@@ -121,23 +128,27 @@ async def cb_handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     state, _ = find_session(user_id)
     
-    # ERROR HANDLING: If session is missing (bot restarted)
+    # 1. Check session
     if not state:
-        await query.answer("Session not found. The town has faded.", show_alert=True)
+        try:
+            await query.answer("Session expired. Please restart.", show_alert=True)
+        except:
+            pass
         return
     
+    # 2. Process Input
     if data.startswith("night:"):
         try:
             target = int(data.split(":")[1])
             state.record_night_action(user_id, target, "generic") 
             await query.edit_message_text("🌑 Choice locked in darkness.")
-            await query.answer() # Close the load spinner
-        except Exception:
+            await query.answer()
+        except Exception as e:
+            logger.error(f"Night action error: {e}")
             await query.answer("Error recording action.", show_alert=True)
         
     elif data.startswith("vote:"):
         target = int(data.split(":")[1])
         state.votes[user_id] = target
-        await query.answer("Vote cast.") # Feedback to user
-        # We do NOT edit the message here to keep votes secret until the end
-        
+        await query.answer("Vote cast.")
+                        
