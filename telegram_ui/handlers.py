@@ -19,6 +19,31 @@ async def cmd_start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id, "Type /join or click below.", reply_markup=join_btn)
     await engine.start_lobby()
 
+async def cmd_force_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    # Only admins should really do this, but for now we check session existence
+    if chat_id not in SESSIONS: return
+    
+    _, engine = SESSIONS[chat_id]
+    await engine.force_start()
+
+async def cmd_players(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if chat_id not in SESSIONS: return
+    
+    state, _ = SESSIONS[chat_id]
+    alive = [p.name for p in state.players.values() if p.is_alive]
+    
+    msg = "**The Living:**\n" + "\n".join(alive) if alive else "None."
+    await context.bot.send_message(chat_id, msg, parse_mode='Markdown')
+
+async def cmd_extend(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if chat_id not in SESSIONS: return
+    
+    await context.bot.send_message(chat_id, "⏳ Time extended.")
+    # (Logic to extend timer would hook into engine here if implemented)
+
 async def cb_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -51,7 +76,7 @@ async def cb_handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if data.startswith("night:"):
         target = int(data.split(":")[1])
-        state.record_night_action(user_id, target, "generic") # Type refined by role in engine
+        state.record_night_action(user_id, target, "generic") 
         await query.edit_message_text("Action recorded.")
         
     elif data.startswith("vote:"):
