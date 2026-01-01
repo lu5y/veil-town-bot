@@ -1,5 +1,23 @@
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+async def open_voting(self, players):
+    keyboard = []
+
+    for p in players:
+        keyboard.append([
+            InlineKeyboardButton(
+                text=f"🗳️ {p.name}",
+                callback_data=f"vote:{p.user_id}"
+            )
+        ])
+
+    await self.app.bot.send_message(
+        chat_id=self.chat_id,
+        text="🗳️ *Voting Phase*\nChoose one player to condemn.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
 class Notifier:
     def __init__(self, application, chat_id):
         """
